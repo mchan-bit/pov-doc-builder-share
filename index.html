@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cribl POV Document Builder</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&display=swap" rel="stylesheet" />
+    <style>
+      * { box-sizing: border-box; }
+      body { font-family: 'Inter', sans-serif; margin: 0; }
+      .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+      .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+      .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+      .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+      #preview-content { font-family: 'Segoe UI', 'Inter', sans-serif; }
+      @keyframes pulse-slow {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+      }
+      .animate-pulse-slow { animation: pulse-slow 3s infinite; }
+      .break-inside-avoid { break-inside: avoid; }
+      .word-page {
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+        word-wrap: break-word;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        overflow-x: hidden;
+        min-width: 0;
+      }
+      #preview-content table {
+        max-width: 100% !important;
+        width: 100% !important;
+        border-collapse: collapse;
+      }
+      #preview-content td, #preview-content th {
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+        word-break: break-word;
+        min-width: 0;
+      }
+      #preview-content pre {
+        max-width: 100% !important;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      #preview-content img {
+        max-width: 100%;
+      }
+    </style>
+  </head>
+  <body class="bg-slate-50 text-slate-900 overflow-hidden">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

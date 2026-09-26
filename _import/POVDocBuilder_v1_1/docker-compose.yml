@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  pov-builder:
+    build: .
+    container_name: cribl-pov-builder
+    ports:
+      - "8080:80"
+    restart: always

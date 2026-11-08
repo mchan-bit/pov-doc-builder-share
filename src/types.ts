@@ -119,6 +119,47 @@ export interface PovUseCases {
   };
 }
 
+export type ShowbackArchStatus = 'Deployed' | 'Configured' | 'Tested' | 'Production';
+
+export interface ShowbackArchEntry {
+  component: string;
+  description: string;
+  status: ShowbackArchStatus;
+}
+
+export type ShowbackFlowStatus = 'Active' | 'Configured' | 'Tested';
+
+export interface ShowbackDataFlowEntry {
+  dataType: string;
+  source: string;
+  destination: string;
+  gbPerDayIn: string;
+  gbPerDayOut: string;
+  status: ShowbackFlowStatus;
+}
+
+export interface ShowbackOptEntry {
+  dataType: string;
+  gbPerDayBefore: string;
+  gbPerDayAfter: string;
+  reductionPercent: string;
+  notes: string;
+}
+
+export interface ShowbackData {
+  architecture: {
+    notes: string;
+    image: string | null;
+    entries: ShowbackArchEntry[];
+  };
+  dataFlows: {
+    entries: ShowbackDataFlowEntry[];
+  };
+  optimization: {
+    entries: ShowbackOptEntry[];
+  };
+}
+
 export interface CustomPort {
   source: string;
   destination: string;

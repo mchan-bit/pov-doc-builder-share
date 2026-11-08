@@ -1,8 +1,27 @@
 # Product API access declaration. Declare Cribl product API paths your app needs to access.
 # At install time, admins see exactly which platform resources the app will use.
 
-# policies:
-#   - object: '/system/lookups'
-#     actions: ['GET']
-#   - object: '/products/stream/groups'
-#     actions: ['GET']
+policies:
+  # Worker group listing (for group selector in Pack Deployment)
+  - object: '/master/groups'
+    actions: ['GET']
+  # Pack management — list installed packs and install new ones
+  - object: '/m/:gid/packs'
+    actions: ['GET', 'POST']
+  - object: '/m/:gid/packs/*'
+    actions: ['GET']
+  # Route management — list and append routes
+  - object: '/m/:gid/routes'
+    actions: ['GET']
+  - object: '/m/:gid/routes/*'
+    actions: ['GET', 'POST', 'PATCH']
+  # Source (input) management — list and create sources
+  - object: '/m/:gid/system/inputs'
+    actions: ['GET', 'POST']
+  - object: '/m/:gid/system/inputs/*'
+    actions: ['GET']
+  # Destination (output) management — list and create destinations
+  - object: '/m/:gid/system/outputs'
+    actions: ['GET', 'POST']
+  - object: '/m/:gid/system/outputs/*'
+    actions: ['GET']

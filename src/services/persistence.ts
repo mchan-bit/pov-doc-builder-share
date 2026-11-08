@@ -1,4 +1,4 @@
-import type { ContentItem, POVInfo, CustomPort, SuccessCriteria, PovSource, PovDestination, PovUseCases } from '../types';
+import type { ContentItem, POVInfo, CustomPort, SuccessCriteria, PovSource, PovDestination, PovUseCases, ShowbackData } from '../types';
 import defaultLibraryJson from '../data/defaultLibrary.json';
 import { kvGet, kvSet } from './kvStore';
 
@@ -18,6 +18,7 @@ export interface SessionData {
   sessionPovSources?: PovSource[];
   sessionPovDestinations?: PovDestination[];
   sessionPovUseCases?: PovUseCases;
+  sessionShowbackData?: ShowbackData;
   architectureChecked?: boolean;
   architectureImage?: string | null;
 }

@@ -8,6 +8,7 @@ import type {
   PovSource,
   PovDestination,
   PovUseCases,
+  ShowbackData,
 } from './types';
 import {
   CATEGORIES,
@@ -38,6 +39,15 @@ import {
   successCriteriaSummary,
   mergeSuccessCriteria,
 } from './components/SuccessCriteriaModal';
+import { PackDeploymentModal } from './components/PackDeploymentModal';
+import {
+  ShowbackModal,
+  ShowbackDocumentSection,
+  EMPTY_SHOWBACK_DATA,
+  showbackSummary,
+  mergeShowbackData,
+} from './components/ShowbackModal';
+import { isCriblCloud } from './services/criblApi';
 import packageJson from '../package.json';
 
 /** Shown in the sidebar so Live Preview can be verified against local code. */
@@ -160,10 +170,11 @@ const App: React.FC = () => {
   const [povSources, setPovSources] = useState<PovSource[]>([]);
   const [povDestinations, setPovDestinations] = useState<PovDestination[]>([]);
   const [povUseCases, setPovUseCases] = useState<PovUseCases>(() => structuredClone(EMPTY_POV_USE_CASES));
+  const [showbackData, setShowbackData] = useState<ShowbackData>(() => structuredClone(EMPTY_SHOWBACK_DATA));
   const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({});
   const [isReady, setIsReady] = useState(false);
   
-  const [activeModal, setActiveModal] = useState<'content' | 'pov-info' | 'pov-sources-destinations' | 'use-cases' | 'success-criteria' | 'custom-port' | 'delete-snippet' | null>(null);
+  const [activeModal, setActiveModal] = useState<'content' | 'pov-info' | 'pov-sources-destinations' | 'use-cases' | 'success-criteria' | 'custom-port' | 'delete-snippet' | 'pack-deployment' | 'showback' | null>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [pendingDeleteKey, setPendingDeleteKey] = useState<string | null>(null);
   const [editingPortIndex, setEditingPortIndex] = useState<number | null>(null);
@@ -246,6 +257,9 @@ const App: React.FC = () => {
           if (sess.sessionPovUseCases) {
             setPovUseCases(mergePovUseCases(sess.sessionPovUseCases));
           }
+          if (sess.sessionShowbackData) {
+            setShowbackData(mergeShowbackData(sess.sessionShowbackData));
+          }
           setArchitectureChecked(!!sess.architectureChecked);
           if (sess.architectureImage) setArchitectureImage(sess.architectureImage);
         }
@@ -281,12 +295,13 @@ const App: React.FC = () => {
         sessionPovSources: povSources,
         sessionPovDestinations: povDestinations,
         sessionPovUseCases: povUseCases,
+        sessionShowbackData: showbackData,
       }).catch((e) => {
         console.error('Failed to save session data', e);
       });
     }, 600);
     return () => clearTimeout(timer);
-  }, [checkedItems, povInfo, architectureChecked, architectureImage, customPorts, sessionCriteria, povSources, povDestinations, povUseCases, isReady]);
+  }, [checkedItems, povInfo, architectureChecked, architectureImage, customPorts, sessionCriteria, povSources, povDestinations, povUseCases, showbackData, isReady]);
 
   const sourcesDestinationsSummary = useMemo(() => {
     const sourceCount = povSources.length;
@@ -310,6 +325,11 @@ const App: React.FC = () => {
     [sessionCriteria],
   );
 
+  const showbackSidebarSummary = useMemo(
+    () => showbackSummary(showbackData),
+    [showbackData],
+  );
+
   const handleResetSession = () => {
     setCheckedItems([]);
     setPovInfo({ ...EMPTY_POV_INFO });
@@ -320,6 +340,7 @@ const App: React.FC = () => {
     setPovSources([]);
     setPovDestinations([]);
     setPovUseCases(structuredClone(EMPTY_POV_USE_CASES));
+    setShowbackData(structuredClone(EMPTY_SHOWBACK_DATA));
     setShowResetConfirm(false);
     triggerIndicator("Document Reset");
   };
@@ -365,7 +386,7 @@ const App: React.FC = () => {
   };
 
   const handleSaveConfig = () => {
-    const config = { checkedItems, povInfo, architectureImage, architectureChecked, sessionCustomPorts: customPorts, sessionSuccessCriteria: sessionCriteria, sessionPovSources: povSources, sessionPovDestinations: povDestinations, sessionPovUseCases: povUseCases };
+    const config = { checkedItems, povInfo, architectureImage, architectureChecked, sessionCustomPorts: customPorts, sessionSuccessCriteria: sessionCriteria, sessionPovSources: povSources, sessionPovDestinations: povDestinations, sessionPovUseCases: povUseCases, sessionShowbackData: showbackData };
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -547,6 +568,9 @@ const App: React.FC = () => {
             if (config.sessionPovUseCases) {
               setPovUseCases(mergePovUseCases(config.sessionPovUseCases));
             }
+            if (config.sessionShowbackData) {
+              setShowbackData(mergeShowbackData(config.sessionShowbackData));
+            }
             setArchitectureChecked(!!config.architectureChecked);
             if (config.architectureImage) setArchitectureImage(config.architectureImage);
             triggerIndicator("Config Loaded");
@@ -586,6 +610,16 @@ const App: React.FC = () => {
             <button onClick={() => setActiveModal('success-criteria')} className="w-full group bg-slate-50 border border-slate-200 rounded-xl p-4 hover:border-[#2596be] hover:bg-white transition-all text-left shadow-sm">
               <span className="text-[10px] font-black text-[#2596be] uppercase tracking-[0.2em] mb-1 block">Success Criteria</span>
               <span className="text-sm font-bold text-slate-700 truncate block">{successCriteriaSidebarSummary}</span>
+            </button>
+            <button onClick={() => setActiveModal('showback')} className="w-full group bg-slate-50 border border-slate-200 rounded-xl p-4 hover:border-[#2596be] hover:bg-white transition-all text-left shadow-sm">
+              <span className="text-[10px] font-black text-[#2596be] uppercase tracking-[0.2em] mb-1 block">POC Showback</span>
+              <span className="text-sm font-bold text-slate-700 truncate block">{showbackSidebarSummary}</span>
+            </button>
+            <button onClick={() => setActiveModal('pack-deployment')} className="w-full group bg-slate-50 border border-slate-200 rounded-xl p-4 hover:border-[#2596be] hover:bg-white transition-all text-left shadow-sm">
+              <span className="text-[10px] font-black text-[#2596be] uppercase tracking-[0.2em] mb-1 block">Deployment</span>
+              <span className="text-sm font-bold text-slate-700 truncate block">
+                {isCriblCloud() ? 'Deploy packs, sources & destinations...' : 'Available in Cribl Cloud'}
+              </span>
             </button>
             <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest text-center pt-1">
               Dev build: {DEV_BUILD_LABEL}
@@ -857,6 +891,8 @@ const App: React.FC = () => {
                 />
                 <SuccessCriteriaDocumentSection criteria={sessionCriteria} />
               </div>
+
+              <ShowbackDocumentSection data={showbackData} />
 
               {CATEGORIES.filter(c => c !== 'SUCCESS CRITERIA' && c !== 'REQUIRED PORTS').map(cat => {
                 const items = checkedItems.filter(k => allContent[k]?.category === cat);
@@ -1232,6 +1268,25 @@ const App: React.FC = () => {
         <SuccessCriteriaModal
           criteria={sessionCriteria}
           onChange={setSessionCriteria}
+          onClose={() => setActiveModal(null)}
+        />
+      )}
+
+      {activeModal === 'showback' && (
+        <ShowbackModal
+          data={showbackData}
+          povSources={povSources}
+          povDestinations={povDestinations}
+          onChange={setShowbackData}
+          onClose={() => setActiveModal(null)}
+        />
+      )}
+
+      {activeModal === 'pack-deployment' && (
+        <PackDeploymentModal
+          povSources={povSources}
+          povDestinations={povDestinations}
+          useCases={povUseCases}
           onClose={() => setActiveModal(null)}
         />
       )}

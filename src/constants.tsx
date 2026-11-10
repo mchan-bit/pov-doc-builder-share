@@ -1,5 +1,6 @@
 
 import React from 'react';
+import criblLogoUrl from './assets/cribl-logo.png';
 
 export const CATEGORIES = [
   'ENVIRONMENT', 
@@ -85,12 +86,8 @@ export const POV_SOURCE_SUGGESTIONS = [
   'Wiz',
 ] as const;
 
-/**
- * Brand Logo Source
- * Points to logo.png in the project root. 
- * For local development, ensure logo.png is present in your folder.
- */
-export const BRAND_LOGO_URL = '/logo.png';
+/** Default Cribl logo, bundled so it loads in local dev and inside the Cribl app. */
+export const BRAND_LOGO_URL = criblLogoUrl;
 
 /** Height of the Cribl logo in the document preview header (px). */
 export const BRAND_LOGO_DOC_HEIGHT = 72;

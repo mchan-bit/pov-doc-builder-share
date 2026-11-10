@@ -756,23 +756,8 @@ const App: React.FC = () => {
                 <table width="100%" border={0} cellPadding={0} cellSpacing={0} style={{ borderCollapse: 'collapse', border: 'none', width: '100%', tableLayout: 'auto' }}>
                   <tbody>
                     <tr>
-                      <td align="left" valign="middle" style={{ border: 'none', padding: 0 }}>
-                        <div style={{ fontSize: '32pt', fontWeight: 900, color: '#000000', margin: 0, textTransform: 'uppercase', lineHeight: '1.2' }}>
-                          {povInfo.customerName || 'CUSTOMER'}
-                        </div>
-                      </td>
-                      <td align="right" valign="middle" rowSpan={2} style={{ border: 'none', padding: 0, minWidth: '150px', textAlign: 'center' }}>
-                        {povInfo.logo && (
-                          <p style={{ margin: '0 0 8pt 0', padding: 0, textAlign: 'center' }}>
-                            <img 
-                              src={povInfo.logo} 
-                              alt="Customer Logo" 
-                              style={{ height: '72px', maxWidth: '300px', objectFit: 'contain', display: 'inline-block' }} 
-                              height="72"
-                            />
-                          </p>
-                        )}
-                        <p style={{ margin: 0, padding: 0, textAlign: 'center' }}>
+                      <td align="left" valign="middle" style={{ border: 'none', padding: '0 12pt 12pt 0' }}>
+                        <p style={{ margin: 0, padding: 0, textAlign: 'left' }}>
                           <img
                             src={criblLogoDataUrl || BRAND_LOGO_URL}
                             alt="Cribl Logo"
@@ -786,9 +771,28 @@ const App: React.FC = () => {
                           />
                         </p>
                       </td>
+                      <td align="right" valign="middle" style={{ border: 'none', padding: '0 0 12pt 0', textAlign: 'right' }}>
+                        {povInfo.logo && (
+                          <p style={{ margin: 0, padding: 0, textAlign: 'right' }}>
+                            <img
+                              src={povInfo.logo}
+                              alt="Customer Logo"
+                              style={{ height: '72px', maxWidth: '300px', objectFit: 'contain', display: 'inline-block' }}
+                              height="72"
+                            />
+                          </p>
+                        )}
+                      </td>
                     </tr>
                     <tr>
-                      <td align="left" valign="top" style={{ border: 'none', padding: '2pt 0 0 0' }}>
+                      <td align="left" valign="middle" colSpan={2} style={{ border: 'none', padding: 0 }}>
+                        <div style={{ fontSize: '32pt', fontWeight: 900, color: '#000000', margin: 0, textTransform: 'uppercase', lineHeight: '1.2' }}>
+                          {povInfo.customerName || 'CUSTOMER'}
+                        </div>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td align="left" valign="top" colSpan={2} style={{ border: 'none', padding: '2pt 0 0 0' }}>
                         <div style={{ fontSize: '11pt', color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', lineHeight: '1.2' }}>
                           PROOF OF VALUE ENGAGEMENT DOCUMENT
                         </div>

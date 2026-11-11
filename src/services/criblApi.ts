@@ -112,19 +112,36 @@ export async function installPack(
   return installed;
 }
 
-export async function listRoutes(groupId: string): Promise<RouteEntry[]> {
-  const data = await apiGet<CountedResponse<{ id: string; routes: RouteEntry[] }>>(
+export interface RoutingTable {
+  id: string;
+  routes: RouteEntry[];
+}
+
+export async function listRoutingTables(groupId: string): Promise<RoutingTable[]> {
+  const data = await apiGet<CountedResponse<RoutingTable>>(
     `/m/${encodeURIComponent(groupId)}/routes`,
   );
-  return data.items?.[0]?.routes ?? [];
+  return data.items ?? [];
+}
+
+export async function listRoutes(groupId: string): Promise<RouteEntry[]> {
+  const tables = await listRoutingTables(groupId);
+  return tables[0]?.routes ?? [];
+}
+
+export async function getRoutingTableId(groupId: string): Promise<string> {
+  const tables = await listRoutingTables(groupId);
+  return tables[0]?.id ?? 'default';
 }
 
 export async function appendRoute(
   groupId: string,
   route: Omit<RouteEntry, 'id'>,
+  tableId?: string,
 ): Promise<void> {
+  const tid = tableId ?? await getRoutingTableId(groupId);
   await apiPost(
-    `/m/${encodeURIComponent(groupId)}/routes/default/append`,
+    `/m/${encodeURIComponent(groupId)}/routes/${encodeURIComponent(tid)}/append`,
     [route],
   );
 }

@@ -18,6 +18,7 @@ import {
   POV_DATA_TYPE_SUGGESTIONS,
   POV_SOURCE_SUGGESTIONS,
 } from './constants';
+import { DESTINATION_OPTIONS } from './data/deploymentMappings';
 import { formatContent } from './services/formatter';
 import {
   loadContentLibrary,
@@ -1219,13 +1220,16 @@ const App: React.FC = () => {
                   />
                 </FormField>
                 <FormField label="Destination" required>
-                  <input
-                    type="text"
-                    className="w-full p-4 border border-slate-200 rounded-xl bg-slate-50"
+                  <select
+                    className="w-full p-4 border border-slate-200 rounded-xl bg-slate-50 font-bold text-sm"
                     value={tempDestination.destination}
-                    placeholder="e.g. Splunk HEC, Datadog"
                     onChange={e => setTempDestination({ ...tempDestination, destination: e.target.value })}
-                  />
+                  >
+                    <option value="">Select destination...</option>
+                    {DESTINATION_OPTIONS.map((opt) => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
                 </FormField>
                 <button
                   type="button"

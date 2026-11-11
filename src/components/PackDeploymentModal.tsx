@@ -4,9 +4,10 @@ import { getRecommendedPacks, type PackRecommendation } from '../data/packMappin
 import {
   mapPovSources,
   mapPovDestinations,
+  buildPayloadFromFields,
   type SourceDeploymentRow,
   type DestinationDeploymentRow,
-  type EditableConfig,
+  type ConfigField,
 } from '../data/deploymentMappings';
 import {
   isCriblCloud,
@@ -17,11 +18,14 @@ import {
   listOutputs,
   createInput,
   createOutput,
+  listRoutes,
+  appendRoute,
+  getRoutingTableId,
   type WorkerGroup,
 } from '../services/criblApi';
-import { resolveSourceLabel, resolveDestinationLabel } from '../useCases/keys';
+import { resolveSourceLabel, resolveDestinationLabel, povSourceKey, povDestinationKey } from '../useCases/keys';
 
-type DeploymentTab = 'packs' | 'sources-destinations';
+type DeploymentTab = 'packs' | 'sources-destinations' | 'routes';
 
 type PackStatus = 'checking' | 'installed' | 'not_installed' | 'installing' | 'error' | 'just_installed';
 
@@ -43,19 +47,12 @@ interface DeploymentLog {
   timestamp: Date;
 }
 
-interface ResourceRowConfig {
-  host: string;
-  port: string;
-  url: string;
-  tls: boolean;
-}
-
 interface SourceRow {
   mapping: SourceDeploymentRow;
   status: ResourceStatus;
   selected: boolean;
   error?: string;
-  config: ResourceRowConfig;
+  fieldValues: Record<string, string | number | boolean>;
 }
 
 interface DestRow {
@@ -63,7 +60,24 @@ interface DestRow {
   status: ResourceStatus;
   selected: boolean;
   error?: string;
-  config: ResourceRowConfig;
+  fieldValues: Record<string, string | number | boolean>;
+}
+
+interface RouteMappingRow {
+  routingEntry: RoutingEntry;
+  sourceLabel: string;
+  sourceInputId: string;
+  packLabel: string;
+  pipelineId: string;
+  destLabel: string;
+  destOutputId: string;
+}
+
+interface RouteRow {
+  mapping: RouteMappingRow;
+  status: ResourceStatus;
+  selected: boolean;
+  error?: string;
 }
 
 export interface PackDeploymentModalProps {
@@ -73,72 +87,43 @@ export interface PackDeploymentModalProps {
   onClose: () => void;
 }
 
-function initConfig(ec?: EditableConfig): ResourceRowConfig {
-  if (ec?.kind === 'hostport') {
-    return { host: ec.defaultHost, port: String(ec.defaultPort), url: '', tls: false };
+function initFieldValues(fields: ConfigField[]): Record<string, string | number | boolean> {
+  const values: Record<string, string | number | boolean> = {};
+  for (const field of fields) {
+    values[field.key] = field.default ?? (field.type === 'boolean' ? false : field.type === 'number' ? 0 : '');
   }
-  if (ec?.kind === 'url') {
-    return { host: '', port: '', url: ec.defaultUrl, tls: false };
-  }
-  return { host: '', port: '', url: '', tls: false };
+  return values;
 }
 
-function buildInputPayload(
-  row: SourceRow,
-): Record<string, unknown> {
-  const { mapping, config } = row;
-  const payload: Record<string, unknown> = {
-    id: mapping.suggestedId,
-    type: mapping.criblType,
-    disabled: true,
-    ...mapping.defaultConfig,
-  };
+function fieldSummary(_fields: ConfigField[], values: Record<string, string | number | boolean>): string {
+  const parts: string[] = [];
 
-  const ec = mapping.editableConfig;
-  if (ec?.kind === 'hostport') {
-    payload.host = config.host;
-    const portNum = parseInt(config.port, 10);
-    if (!isNaN(portNum)) {
-      for (const field of ec.portFields ?? ['port']) {
-        payload[field] = portNum;
-      }
-    }
-    if (config.tls) {
-      payload.tls = { disabled: false };
-    }
-  }
+  const host = values.host;
+  const port = values.port;
+  if (host && port) parts.push(`${host}:${port}`);
+  else if (host) parts.push(String(host));
 
-  return payload;
-}
+  const url = values.url;
+  if (url) parts.push(String(url));
 
-function buildOutputPayload(
-  row: DestRow,
-): Record<string, unknown> {
-  const { mapping, config } = row;
-  const payload: Record<string, unknown> = {
-    id: mapping.suggestedId,
-    type: mapping.criblType,
-    ...mapping.defaultConfig,
-  };
+  const bucket = values.bucket;
+  if (bucket) parts.push(`bucket: ${bucket}`);
 
-  const ec = mapping.editableConfig;
-  if (ec?.kind === 'hostport') {
-    payload.host = config.host;
-    const portNum = parseInt(config.port, 10);
-    if (!isNaN(portNum)) {
-      payload.port = portNum;
-    }
-    if (config.tls) {
-      payload.tls = { disabled: false };
-    }
-  } else if (ec?.kind === 'url') {
-    if (config.url) payload.url = config.url;
-    if (config.tls) {
-      payload.tls = { disabled: false };
-    }
-  }
+  const brokers = values._brokers;
+  if (brokers) parts.push(`brokers: ${brokers}`);
 
-  return payload;
+  const topic = values.topic;
+  if (topic) parts.push(`topic: ${topic}`);
+
+  const index = values.index;
+  if (index) parts.push(`index: ${index}`);
+
+  const region = values.region;
+  if (region && !host && !url) parts.push(`region: ${region}`);
+
+  if (values._tls === true) parts.push('TLS');
+
+  return parts.join(' · ');
 }
 
 function StatusBadge({ status }: { status: PackStatus | ResourceStatus }) {
@@ -208,6 +193,7 @@ function TabBar({ tab, onChange }: { tab: DeploymentTab; onChange: (t: Deploymen
   const tabs: { key: DeploymentTab; label: string }[] = [
     { key: 'packs', label: 'Packs' },
     { key: 'sources-destinations', label: 'Sources & Destinations' },
+    { key: 'routes', label: 'Routes' },
   ];
   return (
     <div className="flex gap-1 bg-slate-100 rounded-xl p-1 mb-5">
@@ -248,114 +234,6 @@ function CommitDeployReminder() {
   );
 }
 
-function HostPortFields({
-  config,
-  disabled,
-  onChange,
-}: {
-  config: ResourceRowConfig;
-  disabled: boolean;
-  onChange: (update: Partial<ResourceRowConfig>) => void;
-}) {
-  return (
-    <div className="flex items-center gap-3 flex-wrap">
-      <div className="flex items-center gap-1.5">
-        <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Host</label>
-        <input
-          type="text"
-          value={config.host}
-          disabled={disabled}
-          onChange={(e) => onChange({ host: e.target.value })}
-          className="w-32 px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white text-[11px] font-mono font-bold text-slate-700 disabled:opacity-50 disabled:bg-slate-100"
-          placeholder="0.0.0.0"
-        />
-      </div>
-      <div className="flex items-center gap-1.5">
-        <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Port</label>
-        <input
-          type="text"
-          inputMode="numeric"
-          value={config.port}
-          disabled={disabled}
-          onChange={(e) => onChange({ port: e.target.value.replace(/[^0-9]/g, '') })}
-          className="w-20 px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white text-[11px] font-mono font-bold text-slate-700 disabled:opacity-50 disabled:bg-slate-100"
-          placeholder="514"
-        />
-      </div>
-      <label className="flex items-center gap-1.5 cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={config.tls}
-          disabled={disabled}
-          onChange={(e) => onChange({ tls: e.target.checked })}
-          className="w-3.5 h-3.5 rounded text-[#2596be] border-slate-300 disabled:opacity-50"
-        />
-        <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider">TLS</span>
-      </label>
-    </div>
-  );
-}
-
-function UrlFields({
-  config,
-  disabled,
-  onChange,
-}: {
-  config: ResourceRowConfig;
-  disabled: boolean;
-  onChange: (update: Partial<ResourceRowConfig>) => void;
-}) {
-  return (
-    <div className="flex items-center gap-3 flex-wrap">
-      <div className="flex items-center gap-1.5 flex-1 min-w-0">
-        <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider shrink-0">URL</label>
-        <input
-          type="text"
-          value={config.url}
-          disabled={disabled}
-          onChange={(e) => onChange({ url: e.target.value })}
-          className="flex-1 min-w-0 px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white text-[11px] font-mono font-bold text-slate-700 disabled:opacity-50 disabled:bg-slate-100"
-          placeholder="https://host:port/path"
-        />
-      </div>
-      <label className="flex items-center gap-1.5 cursor-pointer select-none shrink-0">
-        <input
-          type="checkbox"
-          checked={config.tls}
-          disabled={disabled}
-          onChange={(e) => onChange({ tls: e.target.checked })}
-          className="w-3.5 h-3.5 rounded text-[#2596be] border-slate-300 disabled:opacity-50"
-        />
-        <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider">TLS</span>
-      </label>
-    </div>
-  );
-}
-
-function ConfigFields({
-  editableConfig,
-  config,
-  disabled,
-  onChange,
-}: {
-  editableConfig?: EditableConfig;
-  config: ResourceRowConfig;
-  disabled: boolean;
-  onChange: (update: Partial<ResourceRowConfig>) => void;
-}) {
-  if (!editableConfig) {
-    return (
-      <p className="text-[9px] font-medium text-slate-400 italic">
-        Configure connection details in Cribl UI after creation.
-      </p>
-    );
-  }
-  if (editableConfig.kind === 'hostport') {
-    return <HostPortFields config={config} disabled={disabled} onChange={onChange} />;
-  }
-  return <UrlFields config={config} disabled={disabled} onChange={onChange} />;
-}
-
 function ChevronIcon({ expanded }: { expanded: boolean }) {
   return (
     <svg
@@ -370,6 +248,117 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
   );
 }
 
+function FieldInput({
+  field,
+  value,
+  disabled,
+  onChange,
+}: {
+  field: ConfigField;
+  value: string | number | boolean;
+  disabled: boolean;
+  onChange: (key: string, val: string | number | boolean) => void;
+}) {
+  if (field.type === 'boolean') {
+    return (
+      <label className="flex items-center gap-1.5 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={value === true}
+          disabled={disabled}
+          onChange={(e) => onChange(field.key, e.target.checked)}
+          className="w-3.5 h-3.5 rounded text-[#2596be] border-slate-300 disabled:opacity-50"
+        />
+        <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider">{field.label}</span>
+      </label>
+    );
+  }
+
+  if (field.type === 'select') {
+    return (
+      <div className="flex items-center gap-1.5">
+        <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider whitespace-nowrap">{field.label}</label>
+        <select
+          value={String(value)}
+          disabled={disabled}
+          onChange={(e) => onChange(field.key, e.target.value)}
+          className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white text-[11px] font-bold text-slate-700 disabled:opacity-50 disabled:bg-slate-100"
+        >
+          {field.options?.map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`flex items-center gap-1.5 ${field.wide ? 'flex-1 min-w-0' : ''}`}>
+      <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider whitespace-nowrap">
+        {field.label}
+        {field.required && <span className="text-red-400 ml-0.5">*</span>}
+      </label>
+      <input
+        type={field.type === 'number' ? 'text' : 'text'}
+        inputMode={field.type === 'number' ? 'numeric' : undefined}
+        value={String(value ?? '')}
+        disabled={disabled}
+        onChange={(e) => {
+          const raw = e.target.value;
+          if (field.type === 'number') {
+            const cleaned = raw.replace(/[^0-9]/g, '');
+            onChange(field.key, cleaned === '' ? '' : parseInt(cleaned, 10));
+          } else {
+            onChange(field.key, raw);
+          }
+        }}
+        placeholder={field.placeholder}
+        className={`${field.wide ? 'flex-1 min-w-0' : field.type === 'number' ? 'w-20' : 'w-40'} px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white text-[11px] font-mono font-bold text-slate-700 disabled:opacity-50 disabled:bg-slate-100`}
+      />
+    </div>
+  );
+}
+
+function ConfigFieldsPanel({
+  fields,
+  values,
+  disabled,
+  onChange,
+}: {
+  fields: ConfigField[];
+  values: Record<string, string | number | boolean>;
+  disabled: boolean;
+  onChange: (key: string, val: string | number | boolean) => void;
+}) {
+  if (fields.length === 0) {
+    return (
+      <p className="text-[9px] font-medium text-slate-400 italic">
+        Configure connection details in Cribl UI after creation.
+      </p>
+    );
+  }
+
+  const boolFields = fields.filter((fld) => fld.type === 'boolean');
+  const otherFields = fields.filter((fld) => fld.type !== 'boolean');
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-3 flex-wrap">
+        {otherFields.map((field) => (
+          <FieldInput key={field.key} field={field} value={values[field.key] ?? field.default ?? ''} disabled={disabled} onChange={onChange} />
+        ))}
+      </div>
+      {boolFields.length > 0 && (
+        <div className="flex items-center gap-4">
+          {boolFields.map((field) => (
+            <FieldInput key={field.key} field={field} value={values[field.key] ?? false} disabled={disabled} onChange={onChange} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PackDeploymentModal({
   povSources,
   povDestinations,
@@ -378,25 +367,27 @@ export function PackDeploymentModal({
 }: PackDeploymentModalProps) {
   const [activeTab, setActiveTab] = useState<DeploymentTab>('packs');
 
-  // Shared state
   const [groups, setGroups] = useState<WorkerGroup[]>([]);
   const [selectedGroup, setSelectedGroup] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Packs tab state
   const [packRows, setPackRows] = useState<PackRow[]>([]);
   const [packDeploying, setPackDeploying] = useState(false);
   const [packDeployLog, setPackDeployLog] = useState<DeploymentLog[]>([]);
   const [showPackConfirm, setShowPackConfirm] = useState(false);
 
-  // Sources & Destinations tab state
   const [sourceRows, setSourceRows] = useState<SourceRow[]>([]);
   const [destRows, setDestRows] = useState<DestRow[]>([]);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [resourceDeploying, setResourceDeploying] = useState(false);
   const [resourceDeployLog, setResourceDeployLog] = useState<DeploymentLog[]>([]);
   const [showResourceConfirm, setShowResourceConfirm] = useState(false);
+
+  const [routeRows, setRouteRows] = useState<RouteRow[]>([]);
+  const [routeDeploying, setRouteDeploying] = useState(false);
+  const [routeDeployLog, setRouteDeployLog] = useState<DeploymentLog[]>([]);
+  const [showRouteConfirm, setShowRouteConfirm] = useState(false);
 
   const recommendations = useMemo(
     () => getRecommendedPacks(povSources, povDestinations, useCases),
@@ -420,7 +411,6 @@ export function PackDeploymentModal({
     });
   };
 
-  // Load worker groups on mount
   useEffect(() => {
     if (!isCriblCloud()) {
       setError('Pack deployment is only available when running inside Cribl Cloud.');
@@ -556,7 +546,7 @@ export function PackDeploymentModal({
         mapping: m,
         status: m.known ? 'checking' : 'unknown_type',
         selected: false,
-        config: initConfig(m.editableConfig),
+        fieldValues: initFieldValues(m.fields),
       })),
     );
     setDestRows(
@@ -564,7 +554,7 @@ export function PackDeploymentModal({
         mapping: m,
         status: m.known ? 'checking' : 'unknown_type',
         selected: false,
-        config: initConfig(m.editableConfig),
+        fieldValues: initFieldValues(m.fields),
       })),
     );
 
@@ -578,25 +568,25 @@ export function PackDeploymentModal({
 
       setSourceRows(
         sourceMappings.map((m) => {
-          if (!m.known) return { mapping: m, status: 'unknown_type' as const, selected: false, config: initConfig(m.editableConfig) };
+          if (!m.known) return { mapping: m, status: 'unknown_type' as const, selected: false, fieldValues: initFieldValues(m.fields) };
           const exists = inputIds.has(m.suggestedId);
           return {
             mapping: m,
             status: exists ? 'exists' : 'not_created',
             selected: !exists,
-            config: initConfig(m.editableConfig),
+            fieldValues: initFieldValues(m.fields),
           };
         }),
       );
       setDestRows(
         destMappings.map((m) => {
-          if (!m.known) return { mapping: m, status: 'unknown_type' as const, selected: false, config: initConfig(m.editableConfig) };
+          if (!m.known) return { mapping: m, status: 'unknown_type' as const, selected: false, fieldValues: initFieldValues(m.fields) };
           const exists = outputIds.has(m.suggestedId);
           return {
             mapping: m,
             status: exists ? 'exists' : 'not_created',
             selected: !exists,
-            config: initConfig(m.editableConfig),
+            fieldValues: initFieldValues(m.fields),
           };
         }),
       );
@@ -608,7 +598,7 @@ export function PackDeploymentModal({
           status: 'error' as const,
           selected: false,
           error: message,
-          config: initConfig(m.editableConfig),
+          fieldValues: initFieldValues(m.fields),
         })),
       );
       setDestRows(
@@ -617,7 +607,7 @@ export function PackDeploymentModal({
           status: 'error' as const,
           selected: false,
           error: message,
-          config: initConfig(m.editableConfig),
+          fieldValues: initFieldValues(m.fields),
         })),
       );
     }
@@ -653,21 +643,21 @@ export function PackDeploymentModal({
     );
   };
 
-  const updateSourceConfig = (id: string, update: Partial<ResourceRowConfig>) => {
+  const updateSourceField = (rowId: string, key: string, val: string | number | boolean) => {
     setSourceRows((prev) =>
       prev.map((row) =>
-        row.mapping.suggestedId === id
-          ? { ...row, config: { ...row.config, ...update } }
+        row.mapping.suggestedId === rowId
+          ? { ...row, fieldValues: { ...row.fieldValues, [key]: val } }
           : row,
       ),
     );
   };
 
-  const updateDestConfig = (id: string, update: Partial<ResourceRowConfig>) => {
+  const updateDestField = (rowId: string, key: string, val: string | number | boolean) => {
     setDestRows((prev) =>
       prev.map((row) =>
-        row.mapping.suggestedId === id
-          ? { ...row, config: { ...row.config, ...update } }
+        row.mapping.suggestedId === rowId
+          ? { ...row, fieldValues: { ...row.fieldValues, [key]: val } }
           : row,
       ),
     );
@@ -707,10 +697,15 @@ export function PackDeploymentModal({
     );
 
     for (const row of sourcesToDeploy) {
-      const { suggestedId, criblLabel } = row.mapping;
+      const { suggestedId, criblType, criblLabel, defaultConfig } = row.mapping;
       const displayName = `${row.mapping.povSource.dataType} (${criblLabel})`;
       try {
-        await createInput(selectedGroup, buildInputPayload(row));
+        const payload = buildPayloadFromFields(
+          { id: suggestedId, type: criblType, defaultConfig },
+          row.fieldValues,
+          true,
+        );
+        await createInput(selectedGroup, payload);
         setSourceRows((prev) =>
           prev.map((r) =>
             r.mapping.suggestedId === suggestedId
@@ -739,10 +734,15 @@ export function PackDeploymentModal({
     }
 
     for (const row of destsToDeploy) {
-      const { suggestedId, criblLabel } = row.mapping;
+      const { suggestedId, criblType, criblLabel, defaultConfig } = row.mapping;
       const displayName = `${row.mapping.povDestination.siemSoa} (${criblLabel})`;
       try {
-        await createOutput(selectedGroup, buildOutputPayload(row));
+        const payload = buildPayloadFromFields(
+          { id: suggestedId, type: criblType, defaultConfig },
+          row.fieldValues,
+          false,
+        );
+        await createOutput(selectedGroup, payload);
         setDestRows((prev) =>
           prev.map((r) =>
             r.mapping.suggestedId === suggestedId
@@ -773,13 +773,145 @@ export function PackDeploymentModal({
     setResourceDeploying(false);
   };
 
+  // ─── Routes tab logic ───
+
+  const routeMappings = useMemo((): RouteMappingRow[] => {
+    if (!useCases.routing.enabled) return [];
+    return routingEntries.map((entry) => {
+      const srcMapping = sourceMappings.find((m) => povSourceKey(m.povSource) === entry.sourceKey);
+      const dstMapping = destMappings.find((m) => povDestinationKey(m.povDestination) === entry.destinationKey);
+      const dataType = srcMapping?.povSource.dataType ?? '';
+      const packRec = recommendations.find((r) =>
+        r.reason.toLowerCase().includes(dataType.toLowerCase()) && dataType !== '',
+      );
+
+      return {
+        routingEntry: entry,
+        sourceLabel: srcMapping
+          ? `${srcMapping.povSource.dataType} (${srcMapping.criblLabel})`
+          : resolveSourceLabel(povSources, entry.sourceKey),
+        sourceInputId: srcMapping?.suggestedId ?? '',
+        packLabel: packRec?.displayName ?? 'No Pack',
+        pipelineId: packRec ? `${packRec.packId}:main` : 'passthru',
+        destLabel: dstMapping
+          ? `${dstMapping.povDestination.siemSoa} (${dstMapping.criblLabel})`
+          : resolveDestinationLabel(povDestinations, entry.destinationKey),
+        destOutputId: dstMapping?.suggestedId ?? '',
+      };
+    });
+  }, [routingEntries, sourceMappings, destMappings, recommendations, povSources, povDestinations, useCases.routing.enabled]);
+
+  const checkExistingRoutes = useCallback(async (groupId: string) => {
+    setRouteRows(
+      routeMappings.map((m) => ({ mapping: m, status: 'checking' as const, selected: false })),
+    );
+    try {
+      const existingRoutes = await listRoutes(groupId);
+      setRouteRows(
+        routeMappings.map((m) => {
+          const exists = existingRoutes.some(
+            (er) =>
+              er.output === m.destOutputId &&
+              er.filter?.includes(m.sourceInputId) &&
+              m.sourceInputId !== '',
+          );
+          return {
+            mapping: m,
+            status: exists ? ('exists' as const) : ('not_created' as const),
+            selected: !exists,
+          };
+        }),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Check failed';
+      setRouteRows(
+        routeMappings.map((m) => ({ mapping: m, status: 'error' as const, selected: false, error: message })),
+      );
+    }
+  }, [routeMappings]);
+
+  useEffect(() => {
+    if (selectedGroup && activeTab === 'routes' && routeMappings.length > 0) {
+      void checkExistingRoutes(selectedGroup);
+    }
+  }, [selectedGroup, activeTab, checkExistingRoutes, routeMappings.length]);
+
+  const selectedRouteCount = routeRows.filter((r) => r.selected && r.status === 'not_created').length;
+
+  const toggleRoute = (idx: number) => {
+    setRouteRows((prev) =>
+      prev.map((row, i) =>
+        i === idx && row.status === 'not_created' ? { ...row, selected: !row.selected } : row,
+      ),
+    );
+  };
+
+  const handleDeployRoutes = async () => {
+    setShowRouteConfirm(false);
+    setRouteDeploying(true);
+    setRouteDeployLog([]);
+
+    const toDeploy = routeRows
+      .map((r, i) => ({ ...r, idx: i }))
+      .filter((r) => r.selected && r.status === 'not_created');
+
+    setRouteRows((prev) =>
+      prev.map((row, i) =>
+        toDeploy.some((d) => d.idx === i) ? { ...row, status: 'creating' } : row,
+      ),
+    );
+
+    let tableId: string;
+    try {
+      tableId = await getRoutingTableId(selectedGroup);
+    } catch {
+      tableId = 'default';
+    }
+
+    for (const row of toDeploy) {
+      const { mapping, idx } = row;
+      const displayName = `${mapping.sourceLabel} → ${mapping.destLabel}`;
+      try {
+        await appendRoute(selectedGroup, {
+          name: `POV: ${mapping.sourceLabel} → ${mapping.destLabel}`,
+          filter: `__inputId=='${mapping.sourceInputId}'`,
+          pipeline: mapping.pipelineId,
+          output: mapping.destOutputId,
+          final: false,
+          disabled: true,
+          description: `POV route — fidelity: ${mapping.routingEntry.fidelity}`,
+        }, tableId);
+        setRouteRows((prev) =>
+          prev.map((r, i) => (i === idx ? { ...r, status: 'created', selected: false } : r)),
+        );
+        setRouteDeployLog((prev) => [
+          ...prev,
+          { id: `route_${idx}`, displayName, success: true, message: 'Route created', timestamp: new Date() },
+        ]);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Creation failed';
+        setRouteRows((prev) =>
+          prev.map((r, i) => (i === idx ? { ...r, status: 'error', error: message } : r)),
+        );
+        setRouteDeployLog((prev) => [
+          ...prev,
+          { id: `route_${idx}`, displayName, success: false, message, timestamp: new Date() },
+        ]);
+      }
+    }
+
+    setRouteDeploying(false);
+  };
+
   // ─── Render ───
 
   const hasRecommendations = recommendations.length > 0;
   const hasResources = sourceMappings.length > 0 || destMappings.length > 0;
-  const isDeploying = packDeploying || resourceDeploying;
+  const hasRoutes = routeMappings.length > 0;
+  const isDeploying = packDeploying || resourceDeploying || routeDeploying;
   const anyPackSuccess = packDeployLog.some((e) => e.success);
   const anyResourceSuccess = resourceDeployLog.some((e) => e.success);
+  const anyRouteSuccess = routeDeployLog.some((e) => e.success);
 
   const renderResourceRow = (
     row: SourceRow | DestRow,
@@ -795,9 +927,10 @@ export function PackDeploymentModal({
     const secondaryLabel = srcRow
       ? srcRow.mapping.povSource.source
       : dstRow!.mapping.povDestination.destination;
-    const ec = row.mapping.editableConfig;
+    const fields = row.mapping.fields;
     const isExpanded = expandedRows.has(id);
     const canEdit = row.status === 'not_created' && !isDeploying;
+    const summary = fieldSummary(fields, row.fieldValues);
 
     return (
       <div
@@ -814,7 +947,6 @@ export function PackDeploymentModal({
             : 'bg-slate-50 border-slate-200'
         }`}
       >
-        {/* Main row */}
         <div className="flex items-center gap-3 px-4 py-3">
           <input
             type="checkbox"
@@ -838,22 +970,10 @@ export function PackDeploymentModal({
             </div>
             <p className="text-[9px] font-medium text-slate-400 mt-0.5">
               Cribl type: <span className="font-mono font-bold text-slate-500">{row.mapping.criblType || '—'}</span>
-              {ec?.kind === 'hostport' && row.config.host && (
+              {summary && (
                 <>
                   {' · '}
-                  <span className="font-mono text-slate-500">{row.config.host}:{row.config.port}</span>
-                </>
-              )}
-              {ec?.kind === 'url' && row.config.url && (
-                <>
-                  {' · '}
-                  <span className="font-mono text-slate-500 truncate">{row.config.url}</span>
-                </>
-              )}
-              {row.config.tls && (
-                <>
-                  {' · '}
-                  <span className="font-bold text-emerald-600">TLS</span>
+                  <span className="font-mono text-slate-500">{summary}</span>
                 </>
               )}
             </p>
@@ -864,18 +984,17 @@ export function PackDeploymentModal({
           <StatusBadge status={row.status} />
         </div>
 
-        {/* Expanded config */}
         {isExpanded && (
           <div className="px-4 pb-3 pt-0 ml-[4.25rem]">
             <div className="p-3 bg-white/60 rounded-lg border border-slate-100">
-              <ConfigFields
-                editableConfig={ec}
-                config={row.config}
+              <ConfigFieldsPanel
+                fields={fields}
+                values={row.fieldValues}
                 disabled={!canEdit}
-                onChange={(update) =>
+                onChange={(key, val) =>
                   isSource
-                    ? updateSourceConfig(id, update)
-                    : updateDestConfig(id, update)
+                    ? updateSourceField(id, key, val)
+                    : updateDestField(id, key, val)
                 }
               />
               <p className="text-[8px] font-bold text-slate-400 mt-2 uppercase tracking-wider">
@@ -897,7 +1016,6 @@ export function PackDeploymentModal({
         className="bg-white w-full max-w-3xl rounded-[2.5rem] p-10 shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
         <div className="flex justify-between items-start mb-6">
           <div>
             <h3 className="text-3xl font-black uppercase text-slate-900">Deployment</h3>
@@ -913,7 +1031,6 @@ export function PackDeploymentModal({
           </button>
         </div>
 
-        {/* Non-Cloud or Error States */}
         {error && !isCriblCloud() ? (
           <div className="text-center py-12">
             <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -944,7 +1061,6 @@ export function PackDeploymentModal({
           </div>
         ) : (
           <>
-            {/* Worker Group Selector (shared) */}
             <div className="mb-5">
               <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1 block mb-1.5">
                 Worker Group
@@ -965,7 +1081,6 @@ export function PackDeploymentModal({
               </select>
             </div>
 
-            {/* Tab Bar */}
             <TabBar tab={activeTab} onChange={setActiveTab} />
 
             {/* ═══ Packs Tab ═══ */}
@@ -1127,7 +1242,6 @@ export function PackDeploymentModal({
                       </div>
                     </div>
 
-                    {/* Sources */}
                     {sourceRows.length > 0 && (
                       <div>
                         <h4 className="text-[10px] font-black text-[#2596be] uppercase tracking-[0.15em] mb-2 px-1 flex items-center gap-2">
@@ -1144,7 +1258,6 @@ export function PackDeploymentModal({
                       </div>
                     )}
 
-                    {/* Destinations */}
                     {destRows.length > 0 && (
                       <div>
                         <h4 className="text-[10px] font-black text-[#2596be] uppercase tracking-[0.15em] mb-2 px-1 flex items-center gap-2">
@@ -1161,7 +1274,6 @@ export function PackDeploymentModal({
                       </div>
                     )}
 
-                    {/* Info note */}
                     {selectedResourceCount > 0 && !resourceDeploying && (
                       <div className="flex items-start gap-3 px-4 py-3 bg-blue-50 border border-blue-200 rounded-xl">
                         <svg className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
@@ -1172,13 +1284,12 @@ export function PackDeploymentModal({
                             Sources Created as Disabled
                           </p>
                           <p className="text-[10px] text-blue-700 mt-0.5">
-                            Sources are created in a disabled state. Expand each row to configure host, port, and TLS before deploying. Enable them in the Cribl UI when ready.
+                            Sources are created in a disabled state. Expand each row to configure required fields before deploying. Enable sources in the Cribl UI when ready. Required fields are marked with <span className="text-red-500 font-black">*</span>.
                           </p>
                         </div>
                       </div>
                     )}
 
-                    {/* Resource deploy log */}
                     {resourceDeployLog.length > 0 && (
                       <div>
                         <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] mb-2 px-1">
@@ -1206,6 +1317,182 @@ export function PackDeploymentModal({
                 )}
               </div>
             )}
+
+            {/* ═══ Routes Tab ═══ */}
+            {activeTab === 'routes' && (
+              <div className="space-y-5 max-h-[45vh] overflow-y-auto custom-scrollbar pr-2">
+                {!hasRoutes ? (
+                  <div className="text-center py-8 bg-slate-50 rounded-2xl border border-slate-100">
+                    <p className="text-xs font-bold text-slate-500">No routes configured.</p>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Enable routing in Use Cases and define source-to-destination paths first.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between px-1">
+                      <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em]">
+                        Routes ({routeRows.length})
+                      </h4>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setRouteRows((prev) => prev.map((row) => row.status === 'not_created' ? { ...row, selected: true } : row))}
+                          disabled={isDeploying}
+                          className="text-[9px] font-black text-[#2596be] uppercase tracking-wider hover:underline disabled:opacity-50"
+                        >
+                          Select All
+                        </button>
+                        <span className="text-slate-300">|</span>
+                        <button
+                          type="button"
+                          onClick={() => setRouteRows((prev) => prev.map((row) => row.status === 'not_created' ? { ...row, selected: false } : row))}
+                          disabled={isDeploying}
+                          className="text-[9px] font-black text-slate-400 uppercase tracking-wider hover:underline disabled:opacity-50"
+                        >
+                          Deselect All
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      {routeRows.map((row, idx) => (
+                        <div
+                          key={idx}
+                          className={`rounded-xl border transition-colors ${
+                            row.status === 'created'
+                              ? 'bg-emerald-50 border-emerald-200'
+                              : row.status === 'error'
+                              ? 'bg-red-50 border-red-200'
+                              : row.selected && row.status === 'not_created'
+                              ? 'bg-blue-50 border-blue-200'
+                              : 'bg-slate-50 border-slate-200'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 px-4 py-3">
+                            <input
+                              type="checkbox"
+                              checked={row.selected}
+                              disabled={row.status !== 'not_created' || isDeploying}
+                              onChange={() => toggleRoute(idx)}
+                              className="w-4 h-4 rounded text-[#2596be] border-slate-300 disabled:opacity-40 shrink-0"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                {/* Source */}
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-[9px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                                      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                                      <polyline points="7 10 12 15 17 10" />
+                                      <line x1="12" y1="15" x2="12" y2="3" />
+                                    </svg>
+                                    Source
+                                  </div>
+                                  <p className="text-[11px] font-bold text-slate-800 truncate">{row.mapping.sourceLabel}</p>
+                                  <p className="text-[8px] font-mono text-slate-400 truncate">{row.mapping.sourceInputId || '—'}</p>
+                                </div>
+
+                                <svg className="w-4 h-4 text-slate-300 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                                  <path d="M9 5l7 7-7 7" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+
+                                {/* Pack / Pipeline */}
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-[9px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                                      <path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" strokeLinecap="round" strokeLinejoin="round" />
+                                    </svg>
+                                    Pack
+                                  </div>
+                                  <p className="text-[11px] font-bold text-slate-800 truncate">{row.mapping.packLabel}</p>
+                                  <p className="text-[8px] font-mono text-slate-400 truncate">{row.mapping.pipelineId}</p>
+                                </div>
+
+                                <svg className="w-4 h-4 text-slate-300 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                                  <path d="M9 5l7 7-7 7" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+
+                                {/* Destination */}
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-[9px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                                      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                                      <polyline points="17 8 12 3 7 8" />
+                                      <line x1="12" y1="3" x2="12" y2="15" />
+                                    </svg>
+                                    Destination
+                                  </div>
+                                  <p className="text-[11px] font-bold text-slate-800 truncate">{row.mapping.destLabel}</p>
+                                  <p className="text-[8px] font-mono text-slate-400 truncate">{row.mapping.destOutputId || '—'}</p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3 mt-1.5">
+                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-wider ${
+                                  row.mapping.routingEntry.fidelity === 'Full Fidelity'
+                                    ? 'bg-violet-50 text-violet-600'
+                                    : 'bg-teal-50 text-teal-600'
+                                }`}>
+                                  {row.mapping.routingEntry.fidelity}
+                                </span>
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-wider bg-slate-100 text-slate-500">
+                                  {row.mapping.routingEntry.format}
+                                </span>
+                              </div>
+                              {row.error && (
+                                <p className="text-[9px] font-medium text-red-500 mt-1">{row.error}</p>
+                              )}
+                            </div>
+                            <StatusBadge status={row.status} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {selectedRouteCount > 0 && !routeDeploying && (
+                      <div className="flex items-start gap-3 px-4 py-3 bg-blue-50 border border-blue-200 rounded-xl">
+                        <svg className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                          <path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <div>
+                          <p className="text-[10px] font-black text-blue-800 uppercase tracking-wider">
+                            Routes Created as Disabled
+                          </p>
+                          <p className="text-[10px] text-blue-700 mt-0.5">
+                            Routes are created in a disabled state and appended to the default route group.
+                            Enable routes in the Cribl UI when ready. Verify pipeline assignments match your installed packs.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {routeDeployLog.length > 0 && (
+                      <div>
+                        <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] mb-2 px-1">
+                          Deployment Log
+                        </h4>
+                        <div className="space-y-1.5">
+                          {routeDeployLog.map((entry, i) => (
+                            <div
+                              key={i}
+                              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-[10px] font-bold ${
+                                entry.success ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
+                              }`}
+                            >
+                              <span className={`w-1.5 h-1.5 rounded-full ${entry.success ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                              <span className="font-black">{entry.displayName}</span>
+                              <span className="flex-1 text-right opacity-75">{entry.message}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {anyRouteSuccess && !routeDeploying && <CommitDeployReminder />}
+                  </>
+                )}
+              </div>
+            )}
           </>
         )}
 
@@ -1229,6 +1516,15 @@ export function PackDeploymentModal({
             </button>
           )}
 
+          {activeTab === 'routes' && hasRoutes && selectedRouteCount > 0 && !isDeploying && isCriblCloud() && (
+            <button
+              onClick={() => setShowRouteConfirm(true)}
+              className="flex-1 py-6 bg-[#2596be] text-white font-black uppercase tracking-widest rounded-3xl shadow-xl hover:bg-[#1a7696] transition-all active:scale-[0.98]"
+            >
+              Deploy {selectedRouteCount} Route{selectedRouteCount === 1 ? '' : 's'}
+            </button>
+          )}
+
           {isDeploying && (
             <div className="flex-1 py-6 bg-slate-200 text-slate-500 font-black uppercase tracking-widest rounded-3xl text-center">
               <span className="inline-flex items-center gap-2">
@@ -1242,17 +1538,18 @@ export function PackDeploymentModal({
             className={`${
               !isDeploying && (
                 (activeTab === 'packs' && hasRecommendations && selectedPackCount > 0) ||
-                (activeTab === 'sources-destinations' && hasResources && selectedResourceCount > 0)
+                (activeTab === 'sources-destinations' && hasResources && selectedResourceCount > 0) ||
+                (activeTab === 'routes' && hasRoutes && selectedRouteCount > 0)
               )
                 ? 'px-8 py-6 bg-slate-100 text-slate-500'
                 : 'flex-1 py-6 bg-[#2596be] text-white hover:bg-[#1a7696]'
             } font-black uppercase tracking-widest rounded-3xl shadow-xl transition-all active:scale-[0.98]`}
           >
-            {(anyPackSuccess || anyResourceSuccess) ? 'Done' : 'Close'}
+            {(anyPackSuccess || anyResourceSuccess || anyRouteSuccess) ? 'Done' : 'Close'}
           </button>
         </div>
 
-        {/* ─── Pack Confirmation Dialog ─── */}
+        {/* Pack Confirmation Dialog */}
         {showPackConfirm && (
           <div
             className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm"
@@ -1299,14 +1596,67 @@ export function PackDeploymentModal({
           </div>
         )}
 
-        {/* ─── Resource Confirmation Dialog ─── */}
+        {/* Route Confirmation Dialog */}
+        {showRouteConfirm && (
+          <div
+            className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm"
+            onClick={() => setShowRouteConfirm(false)}
+          >
+            <div
+              className="bg-white p-8 rounded-[2rem] shadow-2xl border border-blue-100 max-w-md w-full text-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="w-16 h-16 bg-blue-50 text-[#2596be] rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path d="M13 10V3L4 14h7v7l9-11h-7z" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+              <h4 className="font-black text-slate-900 uppercase mb-2">Create Routes?</h4>
+              <p className="text-xs text-slate-500 mb-2">
+                This will create {selectedRouteCount} route{selectedRouteCount === 1 ? '' : 's'} in
+                worker group <strong>{selectedGroup}</strong>.
+              </p>
+              <div className="text-left bg-slate-50 rounded-xl p-3 mb-6 max-h-48 overflow-y-auto">
+                {routeRows
+                  .filter((r) => r.selected && r.status === 'not_created')
+                  .map((r, i) => (
+                    <div key={i} className="py-1 border-b border-slate-100 last:border-0">
+                      <p className="text-[10px] font-bold text-slate-600">
+                        {r.mapping.sourceLabel}
+                        <span className="text-slate-400 mx-1">→</span>
+                        {r.mapping.packLabel}
+                        <span className="text-slate-400 mx-1">→</span>
+                        {r.mapping.destLabel}
+                      </p>
+                    </div>
+                  ))}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleDeployRoutes}
+                  className="flex-1 py-3 bg-[#2596be] text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-[#1a7696] transition-all"
+                >
+                  Create
+                </button>
+                <button
+                  onClick={() => setShowRouteConfirm(false)}
+                  className="flex-1 py-3 bg-slate-100 text-slate-500 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-slate-200 transition-all"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Resource Confirmation Dialog */}
         {showResourceConfirm && (
           <div
             className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm"
             onClick={() => setShowResourceConfirm(false)}
           >
             <div
-              className="bg-white p-8 rounded-[2rem] shadow-2xl border border-blue-100 max-w-sm w-full text-center"
+              className="bg-white p-8 rounded-[2rem] shadow-2xl border border-blue-100 max-w-md w-full text-center"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="w-16 h-16 bg-blue-50 text-[#2596be] rounded-full flex items-center justify-center mx-auto mb-4">
@@ -1319,22 +1669,18 @@ export function PackDeploymentModal({
                 This will create {selectedResourceCount} resource{selectedResourceCount === 1 ? '' : 's'} in
                 worker group <strong>{selectedGroup}</strong>.
               </p>
-              <div className="text-left bg-slate-50 rounded-xl p-3 mb-6 max-h-40 overflow-y-auto">
+              <div className="text-left bg-slate-50 rounded-xl p-3 mb-6 max-h-48 overflow-y-auto">
                 {selectedSourceCount > 0 && (
                   <>
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider mb-1">Sources</p>
                     {sourceRows
                       .filter((r) => r.selected && r.status === 'not_created')
                       .map((r) => {
-                        const ec = r.mapping.editableConfig;
-                        const detail = ec?.kind === 'hostport'
-                          ? ` — ${r.config.host}:${r.config.port}${r.config.tls ? ' (TLS)' : ''}`
-                          : ec?.kind === 'url' && r.config.url
-                          ? ` — ${r.config.url}${r.config.tls ? ' (TLS)' : ''}`
-                          : '';
+                        const summary = fieldSummary(r.mapping.fields, r.fieldValues);
                         return (
                           <p key={r.mapping.suggestedId} className="text-[10px] font-bold text-slate-600 py-0.5 pl-2">
-                            • {r.mapping.povSource.dataType} ({r.mapping.criblLabel}){detail}
+                            • {r.mapping.povSource.dataType} ({r.mapping.criblLabel})
+                            {summary && <span className="text-slate-400 ml-1">— {summary}</span>}
                           </p>
                         );
                       })}
@@ -1346,15 +1692,11 @@ export function PackDeploymentModal({
                     {destRows
                       .filter((r) => r.selected && r.status === 'not_created')
                       .map((r) => {
-                        const ec = r.mapping.editableConfig;
-                        const detail = ec?.kind === 'hostport'
-                          ? ` — ${r.config.host}:${r.config.port}${r.config.tls ? ' (TLS)' : ''}`
-                          : ec?.kind === 'url' && r.config.url
-                          ? ` — ${r.config.url}${r.config.tls ? ' (TLS)' : ''}`
-                          : '';
+                        const summary = fieldSummary(r.mapping.fields, r.fieldValues);
                         return (
                           <p key={r.mapping.suggestedId} className="text-[10px] font-bold text-slate-600 py-0.5 pl-2">
-                            • {r.mapping.povDestination.siemSoa} ({r.mapping.criblLabel}){detail}
+                            • {r.mapping.povDestination.siemSoa} ({r.mapping.criblLabel})
+                            {summary && <span className="text-slate-400 ml-1">— {summary}</span>}
                           </p>
                         );
                       })}

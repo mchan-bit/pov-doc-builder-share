@@ -1,6 +1,6 @@
-# Cribl POV Document Builder - User Guide
+# Cribl POV Toolkit - User Guide
 
-This guide covers everything you need to know about running, configuring, and using the POV Document Builder.
+This guide covers everything you need to know about running, configuring, and using the POV Toolkit.
 
 ---
 

@@ -586,7 +586,7 @@ const App: React.FC = () => {
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <img src={criblLogoDataUrl || BRAND_LOGO_URL} alt="Cribl Logo" className="h-8 w-auto object-contain" />
-              <h1 className="text-base font-black tracking-tight leading-none">POV Document Builder</h1>
+              <h1 className="text-base font-black tracking-tight leading-none">POV Toolkit</h1>
             </div>
             <div className="flex gap-1 relative">
               <button onClick={() => { setEditingKey(null); setTempContent({ category: 'ENVIRONMENT' }); setActiveModal('content'); }} className="p-1.5 border rounded-md hover:text-[#2596be] transition cursor-pointer" title="Add Content"><svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4"/></svg></button>

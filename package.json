@@ -30,7 +30,7 @@
     "typescript": "~6.0.2",
     "vite": "^8.1.1"
   },
-  "displayName": "POV Document Builder",
+  "displayName": "POV Toolkit",
   "author": "Kevin Morris",
   "cribl": {
     "type": "app",

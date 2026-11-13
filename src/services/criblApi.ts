@@ -129,21 +129,67 @@ export async function listRoutes(groupId: string): Promise<RouteEntry[]> {
   return tables[0]?.routes ?? [];
 }
 
-export async function getRoutingTableId(groupId: string): Promise<string> {
-  const tables = await listRoutingTables(groupId);
-  return tables[0]?.id ?? 'default';
-}
-
 export async function appendRoute(
   groupId: string,
   route: Omit<RouteEntry, 'id'>,
-  tableId?: string,
 ): Promise<void> {
-  const tid = tableId ?? await getRoutingTableId(groupId);
   await apiPost(
-    `/m/${encodeURIComponent(groupId)}/routes/${encodeURIComponent(tid)}/append`,
+    `/m/${encodeURIComponent(groupId)}/routes/default/append`,
     [route],
   );
+}
+
+export interface CommitResult {
+  commitHash?: string;
+  [key: string]: unknown;
+}
+
+export async function commitConfig(
+  groupId: string,
+  message: string,
+): Promise<string> {
+  const data = await apiPost<CommitResult>(
+    `/m/${encodeURIComponent(groupId)}/version/commit`,
+    { message, effective: true },
+  );
+  return data.commitHash ?? '';
+}
+
+async function apiPatch<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${apiBase()}${path}`, {
+    method: 'PATCH',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`API PATCH ${path} failed (${res.status}): ${text}`);
+  }
+  return res.json();
+}
+
+export async function deployConfig(
+  groupId: string,
+  version: string,
+): Promise<void> {
+  await apiPatch(
+    `/master/groups/${encodeURIComponent(groupId)}/deploy`,
+    { version },
+  );
+}
+
+export async function commitAndDeploy(
+  groupId: string,
+  message: string,
+): Promise<string> {
+  const commitHash = await commitConfig(groupId, message);
+  if (commitHash) {
+    await deployConfig(groupId, commitHash);
+  }
+  return commitHash;
 }
 
 export async function listInputs(groupId: string): Promise<CriblInput[]> {

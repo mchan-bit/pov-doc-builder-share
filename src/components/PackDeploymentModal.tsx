@@ -20,7 +20,7 @@ import {
   createOutput,
   listRoutes,
   appendRoute,
-  getRoutingTableId,
+  commitAndDeploy,
   type WorkerGroup,
 } from '../services/criblApi';
 import { resolveSourceLabel, resolveDestinationLabel, povSourceKey, povDestinationKey } from '../useCases/keys';
@@ -215,20 +215,67 @@ function TabBar({ tab, onChange }: { tab: DeploymentTab; onChange: (t: Deploymen
   );
 }
 
-function CommitDeployReminder() {
+function CommitDeployButton({
+  groupId,
+  label,
+  onResult,
+}: {
+  groupId: string;
+  label: string;
+  onResult: (success: boolean, message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const handleClick = async () => {
+    setBusy(true);
+    try {
+      const hash = await commitAndDeploy(groupId, `POV Deploy: ${label}`);
+      const msg = hash ? `Committed & deployed (${hash.slice(0, 8)})` : 'Committed & deployed';
+      setDone({ ok: true, msg });
+      onResult(true, msg);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Commit & deploy failed';
+      setDone({ ok: false, msg });
+      onResult(false, msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (done?.ok) {
+    return (
+      <div className="flex items-center gap-2 px-4 py-3 bg-green-50 border border-green-200 rounded-xl">
+        <svg className="w-5 h-5 text-green-600 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <p className="text-[10px] font-semibold text-green-800">{done.msg}</p>
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl">
       <svg className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
         <path d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
-      <div>
+      <div className="flex-1">
         <p className="text-[10px] font-black text-amber-800 uppercase tracking-wider">
           Commit & Deploy Required
         </p>
-        <p className="text-[10px] text-amber-700 mt-0.5">
-          Resources have been created but are not yet active.
-          Go to your Worker Group settings in Cribl Cloud to commit and deploy the changes.
+        <p className="text-[10px] text-amber-700 mt-0.5 mb-2">
+          Resources have been created but are not yet active on workers.
         </p>
+        {done && !done.ok && (
+          <p className="text-[10px] text-red-600 mb-2">{done.msg}</p>
+        )}
+        <button
+          onClick={handleClick}
+          disabled={busy}
+          className="px-3 py-1.5 text-[10px] font-bold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded-lg transition-colors"
+        >
+          {busy ? 'Deploying…' : 'Commit & Deploy Now'}
+        </button>
       </div>
     </div>
   );
@@ -861,13 +908,6 @@ export function PackDeploymentModal({
       ),
     );
 
-    let tableId: string;
-    try {
-      tableId = await getRoutingTableId(selectedGroup);
-    } catch {
-      tableId = 'default';
-    }
-
     for (const row of toDeploy) {
       const { mapping, idx } = row;
       const displayName = `${mapping.sourceLabel} → ${mapping.destLabel}`;
@@ -880,7 +920,7 @@ export function PackDeploymentModal({
           final: false,
           disabled: true,
           description: `POV route — fidelity: ${mapping.routingEntry.fidelity}`,
-        }, tableId);
+        });
         setRouteRows((prev) =>
           prev.map((r, i) => (i === idx ? { ...r, status: 'created', selected: false } : r)),
         );
@@ -1199,7 +1239,9 @@ export function PackDeploymentModal({
                       </div>
                     )}
 
-                    {anyPackSuccess && !packDeploying && <CommitDeployReminder />}
+                    {anyPackSuccess && !packDeploying && selectedGroup && (
+                      <CommitDeployButton groupId={selectedGroup} label="Packs" onResult={() => {}} />
+                    )}
                   </>
                 )}
               </div>
@@ -1312,7 +1354,9 @@ export function PackDeploymentModal({
                       </div>
                     )}
 
-                    {anyResourceSuccess && !resourceDeploying && <CommitDeployReminder />}
+                    {anyResourceSuccess && !resourceDeploying && selectedGroup && (
+                      <CommitDeployButton groupId={selectedGroup} label="Sources & Destinations" onResult={() => {}} />
+                    )}
                   </>
                 )}
               </div>
@@ -1488,7 +1532,9 @@ export function PackDeploymentModal({
                       </div>
                     )}
 
-                    {anyRouteSuccess && !routeDeploying && <CommitDeployReminder />}
+                    {anyRouteSuccess && !routeDeploying && selectedGroup && (
+                      <CommitDeployButton groupId={selectedGroup} label="Routes" onResult={() => {}} />
+                    )}
                   </>
                 )}
               </div>

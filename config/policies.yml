@@ -25,3 +25,8 @@ policies:
     actions: ['GET', 'POST']
   - object: '/m/:gid/system/outputs/*'
     actions: ['GET']
+  # Commit & Deploy — commit config changes and deploy to workers
+  - object: '/m/:gid/version/commit'
+    actions: ['POST']
+  - object: '/master/groups/*'
+    actions: ['PATCH']
